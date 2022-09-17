@@ -48,7 +48,7 @@ contract DutchAuction is Ownable {
         _;
     }
 
-    function startAuction(uint64 _startPrice, uint256 auctionDurationInMin) external //onlyOwner
+    function startAuction(uint64 _startPrice, uint256 auctionDurationInMin) external onlyOwner
     atStage(Stages.AuctionDeployed)
     {
         startPrice = _startPrice;
@@ -68,7 +68,7 @@ contract DutchAuction is Ownable {
         return startPrice - (minutesElapsed * discountRate);
     }
 
-    function endAuction() public //onlyOwner
+    function endAuction() public onlyOwner
     atStage(Stages.AuctionStarted)
     {
         finalPrice = getCurrentPrice();
@@ -114,6 +114,10 @@ contract DutchAuction is Ownable {
             return _auctionData[index].quantity;
         }
         return 0;
+    }
+
+    function getAvailableNumberOfItems () public returns (uint64){
+        return currAvailableItems;
     }
 
     function bid(uint64 quantity) public payable
