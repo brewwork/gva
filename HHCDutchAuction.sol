@@ -2,9 +2,10 @@
 pragma solidity ^0.8.4;
 
 import "@openzeppelin/contracts@4.6.0/access/Ownable.sol";
-import "@openzeppelin/contracts@4.6.0/utils/Counters.sol";
+import "ERC721r.sol";
 
-contract DutchAuction is Ownable {
+
+contract HHCDutchAuction is Ownable, ERC721r  {
 
     uint64 constant MAX_SUPPLY = 10000; // 10K (8400 sloth + 1600 Hawk)
     uint maxMint = 10;
@@ -26,14 +27,15 @@ contract DutchAuction is Ownable {
     }
 
     //DUTCH Auction Variables
-    uint64 internal startPrice = 1.5 ether;
+    uint256 internal startPrice = 1.5 * 10**18 wei;
     uint256 public  startAt;
     uint256 public  endsAt;
-    uint256 internal  endPrice = 0.1 ether;
-    uint256 public  discountRate = 0.2 ether;
+    uint256 internal  endPrice = 0.1 * 10**18 wei;
+    uint256 public  discountRate = 0.2 * 10**18 wei;
     uint256 public  minDuration = 35 minutes;
     uint64 internal currAvailableItems = MAX_SUPPLY;
     uint256 internal  finalPrice;
+    uint256 internal  lastAuctionPrice = startPrice;
     //address internal wallet;
     
     Stages internal stage = Stages.AuctionDeployed;
@@ -48,30 +50,58 @@ contract DutchAuction is Ownable {
         _;
     }
 
-    function startAuction(uint64 _startPrice, uint256 auctionDurationInMin) external onlyOwner
+    function startAuction(uint64 _startPrice, uint256 auctionDurationInSeconds) external 
+    //onlyOwner //Comment only owner for testing
     atStage(Stages.AuctionDeployed)
     {
         startPrice = _startPrice;
 
         startAt = block.timestamp;
-        require(auctionDurationInMin >= minDuration, "Minimum Auction duration shall be 35 Minutes");
-        endsAt = block.timestamp + auctionDurationInMin;
+        require(auctionDurationInSeconds >= minDuration, "Minimum Auction duration shall be 35 Minutes");
+        endsAt = block.timestamp + auctionDurationInSeconds;
         //wallet = address(this);
         stage = Stages.AuctionStarted;
     }
 
-    function getCurrentPrice() public view atStage(Stages.AuctionStarted) returns (uint256) {
+    function CalculateCurrentPrice() public atStage(Stages.AuctionStarted) returns (uint256) {
         if (endsAt < block.timestamp) {
             return endPrice;
         }
         uint256 minutesElapsed = (block.timestamp - startAt) / 300;  // Price reduce in every 5 min
-        return startPrice - (minutesElapsed * discountRate);
+        lastAuctionPrice = startPrice - (minutesElapsed * discountRate);
+        return lastAuctionPrice;
     }
 
-    function endAuction() public onlyOwner
+    function getLastAuctionPrice () view public
+    atStage(Stages.AuctionStarted) returns (uint256){
+        return lastAuctionPrice;
+    }
+
+    function getStartAuctionPrice () view public
+    atStage(Stages.AuctionStarted) returns (uint256){
+        return startPrice;
+    }
+
+    function getMaxMintNumber () view public
+    atStage(Stages.AuctionStarted) returns (uint256){
+        return maxMint;
+    }
+
+    function getTotalItems () view public
+    atStage(Stages.AuctionStarted) returns (uint256){
+        return MAX_SUPPLY;
+    }
+
+    function getAvailableNumberOfItems () view public 
+    atStage(Stages.AuctionStarted) returns (uint64){
+        return currAvailableItems;
+    }
+
+    function endAuction() payable 
+    public //onlyOwner
     atStage(Stages.AuctionStarted)
     {
-        finalPrice = getCurrentPrice();
+        finalPrice = CalculateCurrentPrice();
         stage = Stages.AuctionEnded;
     }
 
@@ -82,7 +112,6 @@ contract DutchAuction is Ownable {
         ownerIndex++;
     }
 
-    /// @dev Allows to send a bid to the auction.
 
     function getPlayerIndex (address sender) internal returns (uint64) {
         for (uint64 i = 0; i < ownerIndex ; i++)
@@ -95,19 +124,7 @@ contract DutchAuction is Ownable {
         return (MAX_SUPPLY*2);
     }
 
-    /*function isAllClaimed () internal returns (bool)
-    {
-        for (uint64 i = 0; i < ownerIndex ; i++)
-        {
-            if (!_auctionData[i].isClaimed)
-            {
-                return false;
-            }
-        }
-        return true;        
-    }*/
-
-    function numberOfPreviousAllocations (address sender) internal returns (uint64){
+    function numberOfAllocations (address sender) internal returns (uint64){
         uint64 index = getPlayerIndex (sender);
         if (index < MAX_SUPPLY)
         {
@@ -116,20 +133,16 @@ contract DutchAuction is Ownable {
         return 0;
     }
 
-    function getAvailableNumberOfItems () public returns (uint64){
-        return currAvailableItems;
-    }
-
     function bid(uint64 quantity) public payable
         atStage(Stages.AuctionStarted)
         returns (uint amount)
     {
         uint64 previousAllocation = 0;
-        previousAllocation = numberOfPreviousAllocations(msg.sender);
+        previousAllocation = numberOfAllocations(msg.sender);
         amount = msg.value;
         require(quantity + previousAllocation <= maxMint, "User Exceeded the mint limit");
         require(quantity <= currAvailableItems, "Not enough tokens left");
-        require(msg.value >= (quantity * getCurrentPrice()), "Not enough ether sent");
+        require(msg.value >= (quantity * CalculateCurrentPrice()), "Not enough ether sent");
         payable(owner()).transfer(msg.value);
 
         setAuctionOwnerData (msg.sender, uint64(msg.value), quantity);
@@ -156,5 +169,34 @@ contract DutchAuction is Ownable {
         uint256 balance = _auctionData[idx].price - (_auctionData[idx].quantity * finalPrice);
         require(balance > 0, "No balance amount to Claim");
         payable(msg.sender).transfer (balance);
+    }
+
+    
+
+/****************** ERC721 NFT data ***********************************************/
+    string public baseURI = 
+    "https://gateway.pinata.cloud/ipfs/QmVbDfDcEWP7oLjd28cLEXJ8iATT4C6MuyVqwPs6QXhJSN";
+    event  NFTMinted (address _to, uint256 _id);
+    constructor() ERC721r("HHC NFT", "HHC", MAX_SUPPLY) {}
+    function _baseURI() internal view override returns (string memory) {
+        return baseURI;
+    }
+
+    function claimToken () external payable
+    atStage(Stages.AuctionEnded) {
+        uint64 previousAllocation = 0;
+        previousAllocation = numberOfAllocations(msg.sender);
+        require (previousAllocation > 0, "USER not found");
+
+        _mintRandom(msg.sender, previousAllocation);
+    }
+
+    function _afterTokenTransfer(
+        address from,
+        address to,
+        uint256 tokenId
+    ) internal virtual override {
+        emit NFTMinted (to, tokenId);
+        super._afterTokenTransfer(from, to, tokenId);
     }
 }
